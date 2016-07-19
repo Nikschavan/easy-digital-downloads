@@ -919,88 +919,83 @@ function edd_get_registered_settings() {
  * @return string $input Sanitizied value
  */
 function edd_settings_sanitize( $input = array() ) {
-
 	global $edd_options;
 
-	if ( empty( $_POST['_wp_http_referer'] ) ) {
-		// If we didn't get the referer, just return the settings with nothing changed
-		return $edd_options;
+	$doing_section = false;
+	if ( ! empty( $_POST['_wp_http_referer'] ) ) {
+		$doing_section = true;
 	}
 
-	parse_str( $_POST['_wp_http_referer'], $referrer );
+	$setting_types = edd_get_registered_setting_types();
+	$input         = $input ? $input : array();
 
-	$settings = edd_get_registered_settings();
-	$tab      = isset( $referrer['tab'] ) ? $referrer['tab'] : 'general';
-	$section  = isset( $referrer['section'] ) ? $referrer['section'] : 'main';
+	if ( $doing_section ) {
 
-	$input = $input ? $input : array();
+		parse_str( $_POST['_wp_http_referer'], $referrer ); // Pull out the tab and section
+		$tab      = isset( $referrer['tab'] ) ? $referrer['tab'] : 'general';
+		$section  = isset( $referrer['section'] ) ? $referrer['section'] : 'main';
 
-	// Run a general sanitization for the tab for special fields (like taxes)
-	$input = apply_filters( 'edd_settings_' . $tab . '_sanitize', $input );
-
-	// Run a general sanitization for the section so custom tabs with sub-sections can save special data
-	$input = apply_filters( 'edd_settings_' . $tab . '-' . $section . '_sanitize', $input );
-
-	if ( 'main' === $section && empty( $settings[ $tab ]['main'] ) )  {
-		// Check for extensions that aren't using new sections
+		// Run a general sanitization for the tab for special fields (like taxes)
 		$input = apply_filters( 'edd_settings_' . $tab . '_sanitize', $input );
 
-		$settings[ $tab ]['main'] = array();
-		foreach ( $settings[ $tab ] as $key => $setting ) {
-			if ( is_int( $key ) ) {
-				$settings[ $tab ]['main'][ $setting[ 'id' ] ] = $setting;
-				unset( $settings[ $tab ][ $key ]);
-			}
+		// Run a general sanitization for the section so custom tabs with sub-sections can save special data
+		$input = apply_filters( 'edd_settings_' . $tab . '-' . $section . '_sanitize', $input );
 
-			// Check for an override on the section for when main is empty
-			if ( ! empty( $_POST['edd_section_override'] ) ) {
-				$section = sanitize_text_field( $_POST['edd_section_override'] );
-			}
-		}
 	}
 
-	// Loop through each setting being saved and pass it through a sanitization filter
-	foreach ( $input as $key => $value ) {
+	foreach ( $setting_types as $key => $type ) {
 
-		// Get the setting type (checkbox, select, etc)
-		$type = isset( $settings[ $tab ][ $section ][ $key ]['type'] ) ? $settings[ $tab ][ $section ][ $key ]['type'] : false;
-
-		if ( $type ) {
-			// Field type specific filter
-			$input[$key] = apply_filters( 'edd_settings_sanitize_' . $type, $value, $key );
+		if ( empty( $type ) ) {
+			continue;
 		}
 
-		// General filter
+		$input[ $key ] = apply_filters( 'edd_settings_sanitize_' . $type, $input[ $key ], $key );
 		$input[ $key ] = apply_filters( 'edd_settings_sanitize', $input[ $key ], $key );
-	}
 
-	// Loop through the whitelist and unset any that are empty for the tab being saved
-	$main_settings    = $section == 'main' ? $settings[ $tab ]['main'] : array(); // Check for extensions that aren't using new sections
-	$section_settings = ! empty( $settings[ $tab ][ $section ] ) ? $settings[ $tab ][ $section ] : array();
-
-	$found_settings   = array_merge( $main_settings, $section_settings );
-
-	if ( ! empty( $found_settings ) ) {
-		foreach ( $found_settings as $key => $value ) {
-
-			// settings used to have numeric keys, now they have keys that match the option ID. This ensures both methods work
-			if ( is_numeric( $key ) ) {
-				$key = $value['id'];
-			}
-
-			if ( empty( $input[ $key ] ) ) {
-				unset( $edd_options[ $key ] );
-			}
-
+		if ( array_key_exists( $key, $setting_types ) && empty( $input[ $key ] ) ) {
+			unset( $edd_options[ $key ] );
 		}
 	}
 
 	// Merge our new settings with the existing
 	$output = array_merge( $edd_options, $input );
 
-	add_settings_error( 'edd-notices', '', __( 'Settings updated.', 'easy-digital-downloads' ), 'updated' );
+	if ( $doing_section ) {
+		add_settings_error( 'edd-notices', '', __( 'Settings updated.', 'easy-digital-downloads' ), 'updated' );
+	}
 
 	return $output;
+}
+
+/**
+ * Flattens the set of registered settings and their type so we can easily sanitize all the settings
+ * in a much cleaner set of logic in edd_settings_sanitize
+ *
+ * @since  2.6.5
+ * @return array Key is the setting ID, value is the type of setting it is registered as
+ */
+function edd_get_registered_setting_types() {
+	$settings      = edd_get_registered_settings();
+	$setting_types = array();
+
+	foreach ( $settings as $tab ) {
+
+		foreach ( $tab as $section_or_setting ) {
+
+			// See if we have a setting registered at the tab level for backwards compatibility
+			if ( is_array( $section_or_setting ) && array_key_exists( 'type', $section_or_setting ) ) {
+				$setting_types[ $section_or_setting['id'] ] = $section_or_setting['type'];
+				continue;
+			}
+
+			foreach ( $section_or_setting as $section => $section_settings ) {
+				$setting_types[ $section_settings['id'] ] = $section_settings['type'];
+			}
+		}
+
+	}
+
+	return $setting_types;
 }
 
 /**
